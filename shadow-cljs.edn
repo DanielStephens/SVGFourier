@@ -9,14 +9,14 @@
  [[reagent "0.8.1"]]
 
  :dev-http
- {8020 "public"}
+ {8020 "docs"}
 
  :builds
  {:app
   {:target :browser
-   :output-dir "public/js"
+   :output-dir "docs/js"
    :asset-path "/js"
 
    :modules
-   {:main ; becomes public/js/main.js
+   {:main ; becomes docs/js/main.js
     {:init-fn browser/init}}}}}

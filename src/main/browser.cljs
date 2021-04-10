@@ -437,7 +437,7 @@
 (defn ^:dev/after-load start []
   (js/console.log "start")
   (let [curve (r/atom [])
-        viewport (r/atom (assoc (viewport) :zoom 1))]
+        viewport (r/atom (assoc (viewport) :zoom 0.99))]
     (set! js/document.body.onresize (fn [_]
                                       (swap! viewport merge (client-viewport))))
     (set! js/document.body.style (str "background: " (palette :background) "; color: " (palette :low) ";"))
@@ -456,7 +456,8 @@
                    [fourier-display
                     viewport
                     curve 2 10]]]
-                 (js/document.getElementById "app")))
+                 (js/document.getElementById "app"))
+    (swap! viewport assoc :zoom 1))
   (.requestAnimationFrame js/window animate))
 
 (defn ^:dev/once init []

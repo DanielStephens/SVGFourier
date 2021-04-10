@@ -5,6 +5,16 @@
 
 (defonce anim-time (r/atom 0))
 
+(def palette
+  (do {:background "#110B11"
+       :low "#F2F4CB"
+       :mid "#8CADA7"
+       :high "#B7990D"}
+      {:background "#393F5F"
+       :low "#ffe69d"
+       :mid "#6a7e6a"
+       :high "#ff9760"}))
+
 ;; JS UTILS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def log js/console.log)
@@ -261,13 +271,13 @@
                  :on-double-click (make-vert closest)}]
          [:path {:id "drawn-path"
                  :d (svg-curve cur)
-                 :stroke "#D8D2E1"
+                 :stroke (palette :low)
                  :stroke-width (* ui-scalar 6)
                  :fill "transparent"
                  :on-double-click (make-vert closest)
                  :on-mouse-down (make-vert closest)}]
          [:circle {:r (* ui-scalar 10)
-                   :fill "#FFBF46"
+                   :fill (palette :high)
                    :cx (:x cp)
                    :cy (:y cp)
                    :on-double-click (make-vert closest)
@@ -276,7 +286,7 @@
                                (let [{:keys [x y] :as pos} (vert-xy @p)]
                                  [:circle {:key i
                                            :r (* ui-scalar 10)
-                                           :fill "#B88E8D"
+                                           :fill (palette :mid)
                                            :opacity (node-opacity ui-scalar pos (mouse-pos))
                                            :cx x
                                            :cy y
@@ -391,7 +401,7 @@
                                   :rx d
                                   :ry d
                                   :fill "transparent"
-                                  :stroke "#D8D2E1"
+                                  :stroke (palette :low)
                                   :opacity 0.5
                                   :stroke-dasharray "2, 2"
                                   :cx (:x centre)
@@ -399,7 +409,7 @@
               (doall))
          [:path {:id "svg-path"
                  :d svg-path
-                 :stroke "#D8D2E1"
+                 :stroke (palette :low)
                  :stroke-width (* ui-scalar 6)
                  :fill "transparent"}]
          (->> fp
@@ -408,14 +418,14 @@
                      [:ellipse {:key i
                                 :rx (* ui-scalar (/ 10 (inc (Math/abs i))))
                                 :ry (* ui-scalar (/ 10 (inc (Math/abs i))))
-                                :fill "#B88E8D"
+                                :fill (palette :mid)
                                 :cx (:x p)
                                 :cy (:y p)}]))
               (doall))
          (when-let [[i p] (last fp)]
            [:ellipse {:key i
                       :rx (* ui-scalar 10) :ry (* ui-scalar 10)
-                      :fill "#FFBF46"
+                      :fill (palette :high)
                       :cx (:x p)
                       :cy (:y p)}])]))))
 
@@ -430,6 +440,7 @@
         viewport (r/atom (assoc (viewport) :zoom 1))]
     (set! js/document.body.onresize (fn [_]
                                       (swap! viewport merge (client-viewport))))
+    (set! js/document.body.style (str "background: " (palette :background) "; color: " (palette :low) ";"))
     (on-event "wheel"
               (fn [e]
                 (let [x (.-clientX e)
@@ -437,7 +448,7 @@
                       zoom-delta (.-deltaY e)]
                   (zoom x y zoom-delta viewport))))
     (rdom/render [:div
-                  [vis-a viewport]
+                  [:p "Change the curve and see its Fourier transformation. Click to add a node. Drag nodes to move them. Double click a node to remove it."]
                   [:div {:className "rowC"}
                    [bezier
                     viewport

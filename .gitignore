@@ -1,4 +1,4 @@
-/docs/js
+/docs/js/cljs-runtime
 /node_modules
 /target
 /yarn.lock

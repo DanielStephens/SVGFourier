@@ -455,7 +455,7 @@
                     curve]
                    [fourier-display
                     viewport
-                    curve 2 10]]]
+                    curve 1 15]]]
                  (js/document.getElementById "app"))
     (swap! viewport assoc :zoom 1))
   (.requestAnimationFrame js/window animate))

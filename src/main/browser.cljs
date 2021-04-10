@@ -3,10 +3,17 @@
             [reagent.dom :as rdom]
             [clojure.string :as str]))
 
-(defonce mouse-coordinates (r/atom {:x 0 :y 0}))
 (defonce anim-time (r/atom 0))
 
+;; JS UTILS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (def log js/console.log)
+
+(defn on-event
+  [event-id f]
+  (js/window.addEventListener
+    event-id
+    f))
 
 (defn vis
   ([s]
@@ -23,6 +30,8 @@
 (defn elem [id]
   (js/document.getElementById id))
 
+;; VEC UTILS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn v-op [op & vs]
   (apply merge-with op vs))
 
@@ -37,13 +46,86 @@
 (defn v-div [v d]
   (v-mul v (/ 1 d)))
 
-(defn xy [elem-id event]
+(defn exp-vec
+  [v]
+  {:x (double (Math/cos v))
+   :y (double (Math/sin v))})
+
+(defn v*complex
+  [{x1 :x y1 :y} {x2 :x y2 :y}]
+  {:x (- (* x1 x2) (* y1 y2))
+   :y (+ (* y1 x2) (* x1 y2))})
+
+(defn dist
+  [{x1 :x y1 :y} {x2 :x y2 :y}]
+  (Math/sqrt
+    (+ (* (- x2 x1) (- x2 x1))
+       (* (- y2 y1) (- y2 y1)))))
+
+(defn lerp
+  [v1 v2 t]
+  (v+ v1 (v-mul (v- v2 v1) t)))
+
+;; VIEWPORTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn client-viewport []
+  {:width js/document.documentElement.clientWidth
+   :height js/document.documentElement.clientHeight})
+
+(defn viewport []
+  (merge (client-viewport)
+         {:x 0
+          :y 0
+          :zoom 1}))
+
+(defn svg-viewport
+  [{:keys [x y zoom width height]}]
+  (let [vwidth (* 900 zoom)
+        vheight (* (/ vwidth
+                      width)
+                   (- height 100)
+                   2)
+        vx (- x (/ vwidth 2))
+        vy (- y (/ vheight 2))]
+    {:x vx
+     :y vy
+     :width vwidth
+     :height vheight
+     :viewbox (str vx " " vy " " vwidth " " vheight)
+     :zoom zoom
+     :ui-scalar (/ 1 zoom)}))
+
+(defn rel-mouse-xy [elem-id p]
   (let [canvas (elem elem-id)
         rect (.getBoundingClientRect canvas)]
-    {:x (/ (- (.-clientX event) (.-left rect))
+    {:x (/ (- (:x p) (.-left rect))
            (.-width rect))
-     :y (/ (- (.-clientY event) (.-top rect))
+     :y (/ (- (:y p) (.-top rect))
            (.-height rect))}))
+
+(defn denormalise-01 [{:keys [x y width height]} v]
+  (v+ {:x (* width (:x v)) :y (* height (:y v))}
+      {:x x :y y}))
+
+(defn zoom
+  [mx my mz viewport-atom]
+  (let [dz (/ mz -30)
+        half {:x 0.5 :y 0.5}
+        in-canvas (rel-mouse-xy "canvas" {:x mx :y my})
+        in-fourier (rel-mouse-xy "fourier" {:x mx :y my})
+        from-canvas (dist half in-canvas)
+        from-fourier (dist half in-fourier)
+        offset (denormalise-01 (svg-viewport @viewport-atom)
+                               (if (< from-canvas from-fourier)
+                                 in-canvas
+                                 in-fourier))]
+    (swap! viewport-atom
+           (fn [{:keys [x y zoom] :as vp}]
+             (merge vp
+                    {:zoom (+ zoom dz)}
+                    (lerp {:x x :y y} offset (- dz)))))))
+
+;; BEZIER UTILS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn point-on-curve
   [^js/SVGGeometryElement curve-elem t]
@@ -65,12 +147,6 @@
         (v-mul c1 (* 3 t' t' t))
         (v-mul c2 (* 3 t' t t))
         (v-mul p2 (* t t t)))))
-
-(defn dist
-  [{x1 :x y1 :y} {x2 :x y2 :y}]
-  (Math/sqrt
-    (+ (* (- x2 x1) (- x2 x1))
-       (* (- y2 y1) (- y2 y1)))))
 
 (defn closest-point-on-bezier
   [bez p]
@@ -128,113 +204,91 @@
                more)
         s))))
 
+;; BEZIER CREATION ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn node-opacity
-  [p1 p2]
-  (let [d 50
+  [scale p1 p2]
+  (let [d (* scale 500)
         o (/ (- d
                 (dist p1 p2))
              d)]
     (max 0.1 (min 1
                   o))))
 
-(defn bezier [width height curve-atom]
-  (let [viewport (r/atom {:x 0 :y 0})
-        points (r/atom [
-                        (r/atom {:x (/ width 3) :y (/ height 3)})
-                        (r/atom {:x (* 2 (/ width 3)) :y (/ height 3)})
-                        ;(r/atom {:x 100 :y 100})
-                        (r/atom {:x (/ width 3) :y (* 2 (/ height 3))})])
-        mouse (fn [] (merge-with *
-                                 {:x width :y height}
-                                 @viewport))
-        pxy (fn [{:keys [x y mouse-down]}]
-              (if mouse-down
-                (v+ {:x x :y y} (v- (mouse) mouse-down))
-                {:x x :y y}))
-        xys #(doall (map (comp pxy deref) @points))
-        mouse-up (fn [p]
-                   (js/window.addEventListener
-                     "mouseup"
-                     (fn [& _]
-                       (swap! p #(-> %
-                                     (dissoc :mouse-down)
-                                     (merge (pxy @p)))))))
-        make-point (fn [{:keys [i p]}]
-                     (fn [& _]
-                       (let [index (mod (+ 2 i) (count @points))
-                             patom (r/atom (assoc p :mouse-down p))]
-                         (swap! points
-                                #(concat (take index %)
-                                         [patom]
-                                         (drop index %)))
-                         (mouse-up patom))))
-        fourier (r/atom {})]
-    (fn [& _]
-      (let [ps (xys)
-            cur (curve ps)
-            m (mouse)
+(defn bezier [viewport curve-atom]
+  (let [svg-vp (svg-viewport @viewport)
+        mouse-pos-01 (r/atom {:x 0 :y 0})
+        verts (r/atom [(r/atom (denormalise-01 svg-vp {:x 0.4 :y 0.4}))
+                       (r/atom (denormalise-01 svg-vp {:x 0.6 :y 0.4}))
+                       (r/atom (denormalise-01 svg-vp {:x 0.6 :y 0.6}))])]
+    (fn [viewport _]
+      @viewport
+      (let [{:keys [x y width height viewbox ui-scalar] :as svg-vp} (svg-viewport @viewport)
+            mouse-pos (fn [] (denormalise-01 svg-vp @mouse-pos-01))
+            vert-xy (fn [{:keys [x y mouse-down]}]
+                      (if mouse-down
+                        (v+ {:x x :y y} (v- (mouse-pos) mouse-down))
+                        {:x x :y y}))
+            vert-xys (doall (map (comp vert-xy deref) @verts))
+            handle-mouse-up (fn [vert-atom]
+                              (on-event "mouseup"
+                                        (fn [& _]
+                                          (swap! vert-atom #(-> %
+                                                                (dissoc :mouse-down)
+                                                                (merge (vert-xy @vert-atom)))))))
+            make-vert (fn [{:keys [i p]}]
+                        (fn [& _]
+                          (let [index (mod (+ 2 i) (count @verts))
+                                new-vert (r/atom (assoc p :mouse-down p))]
+                            (swap! verts
+                                   #(concat (take index %)
+                                            [new-vert]
+                                            (drop index %)))
+                            (handle-mouse-up new-vert))))
+            cur (curve vert-xys)
+            m (mouse-pos)
             {:keys [cp] :as closest} (closest-point-on-curve cur m)]
-        (reset! curve-atom (elem "drawn-path"))
-        [:div
-         [vis (mouse)]
-         [vis-a fourier]
-         [:svg {:id "canvas"
-                :view-box (str "0 0 " width " " height)
-                :on-mouse-move (fn [e] (reset! viewport (xy "canvas" e)))}
-          [:rect {:width width
-                  :height height
-                  :opacity 0
-                  :on-mouse-down (make-point closest)
-                  :on-double-click (make-point closest)}]
-          (->> (sort-by (comp Math/abs first) @fourier)
-               (reductions (fn [[_ p1] [i p2]] [i (v+ p1 p2)]))
-               (map (fn [[i p]]
-                      [:ellipse {:key i
-                                 :rx (/ 0.5 (Math/abs i)) :ry (/ 0.5 (Math/abs i))
-                                 :fill "green"
-                                 :cx (:x p)
-                                 :cy (:y p)}]))
-               (doall))
-          [:path {:id "drawn-path"
-                  :d
-                  (svg-curve cur)
-                  :stroke "black"
-                  :fill "transparent"
-                  :on-double-click (make-point closest)
-                  :on-mouse-down (make-point closest)}]
-          [:ellipse {:rx 2 :ry 2
-                     :fill "red"
-                     :cx (:x cp)
-                     :cy (:y cp)
-                     :on-double-click (make-point closest)
-                     :on-mouse-down (make-point closest)}]
-          (doall (map-indexed (fn [i p]
-                                (let [{:keys [x y] :as pos} (pxy @p)
-                                      id (str "node" i)]
-                                  [:ellipse {:id id
-                                             :key i
-                                             :rx 2 :ry 2
-                                             :fill "blue"
-                                             :opacity (node-opacity pos (mouse))
-                                             :cx x
-                                             :cy y
-                                             :on-double-click (fn [& _]
-                                                                (swap! points #(concat (take i %) (drop (inc i) %))))
-                                             :on-mouse-down (fn [& _]
-                                                              (swap! p assoc :mouse-down (mouse))
-                                                              (mouse-up p))
-                                             }]))
-                              @points))]]))))
+        (reset! curve-atom {:element (elem "drawn-path")
+                            :curve cur})
+        [:svg {:id "canvas"
+               :view-box viewbox
+               :on-mouse-move (fn [e] (reset! mouse-pos-01 (rel-mouse-xy "canvas"
+                                                                         {:x (.-clientX e) :y (.-clientY e)})))}
+         [:rect {:x x :y y
+                 :width width :height height
+                 :opacity 0
+                 :on-mouse-down (make-vert closest)
+                 :on-double-click (make-vert closest)}]
+         [:path {:id "drawn-path"
+                 :d (svg-curve cur)
+                 :stroke "#D8D2E1"
+                 :stroke-width (* ui-scalar 6)
+                 :fill "transparent"
+                 :on-double-click (make-vert closest)
+                 :on-mouse-down (make-vert closest)}]
+         [:circle {:r (* ui-scalar 10)
+                   :fill "#FFBF46"
+                   :cx (:x cp)
+                   :cy (:y cp)
+                   :on-double-click (make-vert closest)
+                   :on-mouse-down (make-vert closest)}]
+         (doall (map-indexed (fn [i p]
+                               (let [{:keys [x y] :as pos} (vert-xy @p)]
+                                 [:circle {:key i
+                                           :r (* ui-scalar 10)
+                                           :fill "#B88E8D"
+                                           :opacity (node-opacity ui-scalar pos (mouse-pos))
+                                           :cx x
+                                           :cy y
+                                           :on-double-click (fn [& _]
+                                                              (swap! verts #(concat (take i %) (drop (inc i) %))))
+                                           :on-mouse-down (fn [& _]
+                                                            (swap! p assoc :mouse-down (mouse-pos))
+                                                            (handle-mouse-up p))
+                                           }]))
+                             @verts))]))))
 
-(defn exp-vec
-  [v]
-  {:x (double (Math/cos v))
-   :y (double (Math/sin v))})
-
-(defn v*complex
-  [{x1 :x y1 :y} {x2 :x y2 :y}]
-  {:x (- (* x1 x2) (* y1 y2))
-   :y (+ (* y1 x2) (* x1 y2))})
+;; FOURIER TRANSFORMATION ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn curve-fourier-const
   [curve-elem n]
@@ -250,11 +304,11 @@
   [curve-elem depth]
   (when curve-elem
     (->> (range (- depth) (inc depth))
-        (map (fn [n] [n (curve-fourier-const curve-elem n)]))
-        (into {}))))
+         (map (fn [n] [n (curve-fourier-const curve-elem n)]))
+         (into {}))))
 
-(defn step-fourier
-  [fourier t]
+(defn progress-fourier
+  [t fourier]
   (let [t (mod t 1)
         rot (fn [n v] (v*complex (exp-vec (* 2 Math/PI n (- t)))
                                  v))]
@@ -263,65 +317,122 @@
          (into {}))))
 
 (defn fourier-position
-  [fourier t]
-  (let [f (step-fourier fourier t)]
+  [fourier p0 t da db]
+  (let [f (->> fourier
+               (filter (fn [[i _]] (<= da (Math/abs i) db)))
+               (progress-fourier t)
+               (concat [[0 p0]]))]
     (->> (sort-by (comp Math/abs first) f)
-         (reductions (fn [[_ p1] [i p2]] [i (v+ p1 p2)])))))
+         (reductions (fn [[_ p1] [i p2]] [i (v+ p1 p2)]))
+         rest)))
 
-(defn fourier-path
-  [fourier]
-  (let [samples 100
-        steps (->> (range samples)
-                   (map #(/ % samples)))]
-    (->> steps
-         (map #(fourier-position fourier %))
+(defn fourier-paths
+  [fourier depth position-fn]
+  (let [samples 1000
+        f (memoize (fn [t d p0]
+                     (fourier-position fourier
+                                       p0
+                                       t
+                                       d
+                                       depth)))]
+    (fn [t]
+      (let [ps (position-fn t)
+            tt (/ (int (* t samples)) samples)
+            [li lp] (or (last ps) [nil {:x 0 :y 0}])
+            nps (f tt (if li (inc (Math/abs li)) 0) lp)]
+        (concat ps nps)))))
+
+(defn fourier-outer-path
+  [path-fn]
+  (let [samples 100]
+    (->> (range samples)
+         (map #(path-fn (/ % samples)))
          (map (comp second last)))))
 
-(defn fourier [width height curve-atom]
-  (let [fourier (r/atom {})
-        path (r/atom [])
-        update-fourier (fn [curve-elem]
-                         (let [f (curve-fourier curve-elem 10)]
-                           (reset! fourier f)
-                           (reset! path (fourier-path f))))]
-    (fn [& _]
-      (let [
-            fp (fourier-position @fourier
-                                 0 #_(/ @anim-time 10000))
-            [first-p :as p] @path]
-        (js/setTimeout #(update-fourier @curve-atom) 1000)
-        [:div
-         [vis-a fourier]
-         [vis-a curve-atom]
-         [:svg {:id "canvas"
-                :view-box (str "0 0 " width " " height)}
-          [:path {:id "svg-path"
-                  :d
-                  (str "M "
-                       (->> p
-                            (map (fn [{:keys [x y]}] (str x " " y " L ")))
-                            (str/join " "))
-                       (str (:x first-p) " " (:y first-p)))
-                  :stroke "black"
-                  :fill "transparent"}]
-          #_(let [[_ p] (last positions)]
-              [:ellipse {:rx 0.5 :ry 0.5
-                         :fill "red"
-                         :cx (:x p)
-                         :cy (:y p)}])
-          (->> fp
-               (map (fn [[i p]]
-                      [:ellipse {:key i
-                                 :rx (/ 10 (inc (Math/abs i))) :ry (/ 10 (inc (Math/abs i)))
-                                 :fill "red"
-                                 :cx (:x p)
-                                 :cy (:y p)}]))
-               (doall))]]))))
+(defn svg-path
+  [[f :as path]]
+  (str "M "
+       (->> path
+            (map (fn [{:keys [x y]}] (str x " " y " L ")))
+            (str/join " "))
+       (str (:x f) " " (:y f))))
 
-(def mouse-updater
-  {:on-mouse-move (fn [event]
-                    (reset! mouse-coordinates {:x (.-clientX event) :y (.-clientY event)})
-                    nil)})
+(defn refine-fourier [state-atom element depth-steps max-depth]
+  (let [{:keys [depth fourier position-fn]
+         :or {depth -1
+              position-fn (constantly nil)}} @state-atom
+        next-depth (min (+ depth depth-steps) max-depth)
+        steps (range (inc depth) (inc next-depth))
+        next-fourier (->> steps
+                          (mapcat (fn [n] [[n (curve-fourier-const element n)]
+                                           [(- n) (curve-fourier-const element (- n))]]))
+                          (into {}))
+        f (merge fourier next-fourier)
+        position-fn (fourier-paths f next-depth position-fn)
+        path (fourier-outer-path position-fn)]
+    (swap! state-atom assoc
+           :fourier f
+           :depth next-depth
+           :position-fn position-fn
+           :path path
+           :svg-path (svg-path path))))
+
+(defn update-fourier
+  [{:keys [element curve]} state-atom depth-steps max-depth]
+  (when (not= (:curve @state-atom) curve)
+    (swap! state-atom merge
+           {:element element
+            :curve curve
+            :depth -1
+            :position-fn (constantly nil)}))
+  (when element
+    (refine-fourier state-atom element depth-steps max-depth)))
+
+(defn fourier-display [_viewport curve-atom _depth-steps _max-depth]
+  (let [state (r/atom {})]
+    (fn [viewport _curve-atom depth-steps max-depth]
+      (let [{:keys [viewbox ui-scalar]} (svg-viewport @viewport)
+            {:keys [position-fn svg-path]} @state
+            fp (when position-fn (position-fn (/ @anim-time 10000)))]
+        (update-fourier @curve-atom
+                        state depth-steps max-depth)
+        [:svg {:id "fourier"
+               :view-box viewbox}
+         (->> fp
+              (partition 2 1)
+              (map (fn [[[i centre] [_ p]]]
+                     (let [d (dist centre p)]
+                       [:ellipse {:key i
+                                  :rx d
+                                  :ry d
+                                  :fill "transparent"
+                                  :stroke "#D8D2E1"
+                                  :opacity 0.5
+                                  :stroke-dasharray "2, 2"
+                                  :cx (:x centre)
+                                  :cy (:y centre)}])))
+              (doall))
+         [:path {:id "svg-path"
+                 :d svg-path
+                 :stroke "#D8D2E1"
+                 :stroke-width (* ui-scalar 6)
+                 :fill "transparent"}]
+         (->> fp
+              drop-last
+              (map (fn [[i p]]
+                     [:ellipse {:key i
+                                :rx (* ui-scalar (/ 10 (inc (Math/abs i))))
+                                :ry (* ui-scalar (/ 10 (inc (Math/abs i))))
+                                :fill "#B88E8D"
+                                :cx (:x p)
+                                :cy (:y p)}]))
+              (doall))
+         (when-let [[i p] (last fp)]
+           [:ellipse {:key i
+                      :rx (* ui-scalar 10) :ry (* ui-scalar 10)
+                      :fill "#FFBF46"
+                      :cx (:x p)
+                      :cy (:y p)}])]))))
 
 (defn animate [t]
   (reset! anim-time t)
@@ -330,17 +441,25 @@
 ;; start is called by init and after code reloading finishes
 (defn ^:dev/after-load start []
   (js/console.log "start")
-  (let [curve (r/atom [])]
+  (let [curve (r/atom [])
+        viewport (r/atom (assoc (viewport) :zoom 1))]
+    (set! js/document.body.onresize (fn [_]
+                                      (swap! viewport merge (client-viewport))))
+    (on-event "wheel"
+              (fn [e]
+                (let [x (.-clientX e)
+                      y (.-clientY e)
+                      zoom-delta (.-deltaY e)]
+                  (zoom x y zoom-delta viewport))))
     (rdom/render [:div
-                  ;mouse-updater
-                  ;[vis "mouse" mouse-coordinates]
-                  ;[counting-component]
-                  ;[timer-component]
-                  ;[shared-state]
-                  ;[ball-bounce-2]
-                  [bezier 2000 300 curve]
-                  [fourier 2000 300 curve]
-                  ]
+                  [vis-a viewport]
+                  [:div {:className "rowC"}
+                   [bezier
+                    viewport
+                    curve]
+                   [fourier-display
+                    viewport
+                    curve 2 10]]]
                  (js/document.getElementById "app")))
   (.requestAnimationFrame js/window animate))
 

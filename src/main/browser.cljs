@@ -308,7 +308,7 @@
          (into {}))))
 
 (defn progress-fourier
-  [t fourier]
+  [fourier t]
   (let [t (mod t 1)
         rot (fn [n v] (v*complex (exp-vec (* 2 Math/PI n (- t)))
                                  v))]
@@ -317,30 +317,17 @@
          (into {}))))
 
 (defn fourier-position
-  [fourier p0 t da db]
-  (let [f (->> fourier
-               (filter (fn [[i _]] (<= da (Math/abs i) db)))
-               (progress-fourier t)
-               (concat [[0 p0]]))]
+  [fourier t]
+  (let [f (progress-fourier fourier t)]
     (->> (sort-by (comp Math/abs first) f)
-         (reductions (fn [[_ p1] [i p2]] [i (v+ p1 p2)]))
-         rest)))
+         (reductions (fn [[_ p1] [i p2]] [i (v+ p1 p2)])))))
 
 (defn fourier-paths
-  [fourier depth position-fn]
+  [fourier]
   (let [samples 1000
-        f (memoize (fn [t d p0]
-                     (fourier-position fourier
-                                       p0
-                                       t
-                                       d
-                                       depth)))]
+        f (memoize (fn [i] (fourier-position fourier (/ i samples))))]
     (fn [t]
-      (let [ps (position-fn t)
-            tt (/ (int (* t samples)) samples)
-            [li lp] (or (last ps) [nil {:x 0 :y 0}])
-            nps (f tt (if li (inc (Math/abs li)) 0) lp)]
-        (concat ps nps)))))
+      (f (int (* t samples))))))
 
 (defn fourier-outer-path
   [path-fn]
@@ -358,9 +345,8 @@
        (str (:x f) " " (:y f))))
 
 (defn refine-fourier [state-atom element depth-steps max-depth]
-  (let [{:keys [depth fourier position-fn]
-         :or {depth -1
-              position-fn (constantly nil)}} @state-atom
+  (let [{:keys [depth fourier]
+         :or {depth -1}} @state-atom
         next-depth (min (+ depth depth-steps) max-depth)
         steps (range (inc depth) (inc next-depth))
         next-fourier (->> steps
@@ -368,7 +354,7 @@
                                            [(- n) (curve-fourier-const element (- n))]]))
                           (into {}))
         f (merge fourier next-fourier)
-        position-fn (fourier-paths f next-depth position-fn)
+        position-fn (fourier-paths f)
         path (fourier-outer-path position-fn)]
     (swap! state-atom assoc
            :fourier f
@@ -383,8 +369,7 @@
     (swap! state-atom merge
            {:element element
             :curve curve
-            :depth -1
-            :position-fn (constantly nil)}))
+            :depth -1}))
   (when element
     (refine-fourier state-atom element depth-steps max-depth)))
 

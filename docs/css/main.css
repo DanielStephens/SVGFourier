@@ -3,3 +3,23 @@ body {
 }
 
 .rowC{display:flex; flex-direction:row;}
+
+ /* unvisited link */
+a:link {
+  color: #ffe69d;
+}
+
+/* visited link */
+a:visited {
+  color: #ffe69d;
+}
+
+/* mouse over link */
+a:hover {
+  color: #ff9760;
+}
+
+/* selected link */
+a:active {
+  color: #ff9760;
+}

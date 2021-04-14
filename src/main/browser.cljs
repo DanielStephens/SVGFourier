@@ -448,7 +448,10 @@
                       zoom-delta (.-deltaY e)]
                   (zoom x y zoom-delta viewport))))
     (rdom/render [:div
-                  [:p "Change the curve and see its Fourier transformation. Click to add a node. Drag nodes to move them. Double click a node to remove it."]
+                  [:p "Change the curve and see its Fourier. Click to add a node. Drag nodes to move them. Double click a node to remove it."]
+                  [:p
+                   "Inspired by "
+                   [:a {:href "https://www.youtube.com/watch?v=r6sGWTCMz2k"} "3Blue1Brown"]]
                   [:div {:className "rowC"}
                    [bezier
                     viewport
